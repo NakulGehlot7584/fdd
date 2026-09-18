@@ -14,14 +14,22 @@ import {
   HistorianTelemetryResponse,
 } from '../types/api';
 
-const API_BASE = '/api';
+// Configurable API base URL: supports production Render URL via VITE_API_BASE_URL
+// and falls back to '/api' for local dev (proxied to http://127.0.0.1:8000 via vite.config.ts)
+const RAW_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || '';
+const API_BASE = RAW_BASE
+  ? (RAW_BASE.replace(/\/+$/, '').endsWith('/api')
+      ? RAW_BASE.replace(/\/+$/, '')
+      : `${RAW_BASE.replace(/\/+$/, '')}/api`)
+  : '/api';
 
 async function safeFetch(url: string, init?: RequestInit): Promise<Response> {
   try {
     return await fetch(url, init);
   } catch (err: any) {
+    const target = API_BASE.startsWith('http') ? API_BASE : 'http://127.0.0.1:8000';
     throw new Error(
-      `Cannot connect to Open-FDD backend (${err.message || 'Failed to fetch'}). Please ensure the FastAPI backend is running on http://127.0.0.1:8000.`
+      `Cannot connect to Open-FDD backend (${err.message || 'Failed to fetch'}). Please ensure the FastAPI backend is running at ${target}.`
     );
   }
 }
