@@ -8,4 +8,6 @@ pytest>=8.0.0
 datafusion>=38.0.0
 pyarrow>=15.0.0
 pyyaml>=6.0.0
+pandas>=2.2.0
+
 
