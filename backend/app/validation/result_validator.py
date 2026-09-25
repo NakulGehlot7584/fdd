@@ -72,7 +72,13 @@ class ResultValidator:
             # Equipment applicability check
             is_applicable = (
                 rule_obj is not None
-                and any(k.lower() == equipment_type.lower() for k in rule_obj.equipment_kinds)
+                and (
+                    not rule_obj.equipment_kinds
+                    or any(
+                        k.lower() == equipment_type.lower()
+                        for k in rule_obj.equipment_kinds
+                    )
+                )
             )
 
             # Check status semantics

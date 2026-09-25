@@ -3,8 +3,14 @@
 import pytest
 from app.fdd.catalog import get_rule_catalog
 from app.fdd.executor import get_executor, resolve_equipment_kind
-from app.fdd.models import RuleExecutionStatus
+from app.fdd.models import (
+    FDDExecutionSummary,
+    RuleDefinition,
+    RuleExecutionResult,
+    RuleExecutionStatus,
+)
 from app.historian.storage import HistorianStorage
+from app.validation.result_validator import ResultValidator
 
 
 def test_resolve_equipment_kind():
@@ -107,3 +113,105 @@ def test_status_label_normalization():
     assert status_map[RuleExecutionStatus.NO_FAULT] == "NO FAULT"
     assert status_map[RuleExecutionStatus.SKIPPED_MISSING_ROLES] == "SKIPPED"
     assert status_map[RuleExecutionStatus.ERROR] == "FAILED"
+
+
+def test_result_validator_equipment_applicability_cases():
+    """Verify ResultValidator equipment applicability logic across all 4 specification cases:
+    Case 1: equipment_type = 'AHU', equipment_kinds = [] -> is_applicable = True, no warning
+    Case 2: equipment_type = 'AHU', equipment_kinds = ['ahu'] -> is_applicable = True, no warning
+    Case 3: equipment_type = 'AHU', equipment_kinds = ['vav'] -> is_applicable = False, generates warning
+    Case 4: equipment_type = 'AHU', equipment_kinds = ['ahu', 'vav'] -> is_applicable = True, no warning
+    """
+    catalog = get_rule_catalog()
+    validator = ResultValidator(catalog=catalog)
+
+    # 4 specification test rules
+    rule_c1 = RuleDefinition(
+        rule_id="TEST-CASE1",
+        sql_file="c1.sql",
+        description="Broad Rule",
+        equipment_kinds=[],
+        required_roles=[],
+    )
+    rule_c2 = RuleDefinition(
+        rule_id="TEST-CASE2",
+        sql_file="c2.sql",
+        description="AHU Rule",
+        equipment_kinds=["ahu"],
+        required_roles=[],
+    )
+    rule_c3 = RuleDefinition(
+        rule_id="TEST-CASE3",
+        sql_file="c3.sql",
+        description="VAV Rule",
+        equipment_kinds=["vav"],
+        required_roles=[],
+    )
+    rule_c4 = RuleDefinition(
+        rule_id="TEST-CASE4",
+        sql_file="c4.sql",
+        description="Multi Rule",
+        equipment_kinds=["ahu", "vav"],
+        required_roles=[],
+    )
+
+    validator.known_rules["TEST-CASE1"] = rule_c1
+    validator.known_rules["TEST-CASE2"] = rule_c2
+    validator.known_rules["TEST-CASE3"] = rule_c3
+    validator.known_rules["TEST-CASE4"] = rule_c4
+
+    # Direct logic verification
+    eq_type = "AHU"
+
+    def check_app(r_obj, eq):
+        return r_obj is not None and (
+            not r_obj.equipment_kinds
+            or any(k.lower() == eq.lower() for k in r_obj.equipment_kinds)
+        )
+
+    assert check_app(rule_c1, eq_type) is True   # Case 1: Broad
+    assert check_app(rule_c2, eq_type) is True   # Case 2: Explicit AHU
+    assert check_app(rule_c3, eq_type) is False  # Case 3: VAV on AHU
+    assert check_app(rule_c4, eq_type) is True   # Case 4: AHU + VAV
+
+    summary = FDDExecutionSummary(
+        building_id="TEST_BLDG",
+        equipment_id="AHU_UNIT",
+        equipment_kind="ahu",
+        total_catalog_rules=4,
+        applicable_rules=3,
+        non_applicable_rules=1,
+        total_rules_evaluated=4,
+        rules_succeeded=4,
+        rules_faulted=0,
+        rules_no_fault=4,
+        rules_skipped=0,
+        rules_failed=0,
+        total_elapsed_ms=5.0,
+        poll_seconds=300.0,
+        results=[
+            RuleExecutionResult(rule_id="TEST-CASE1", status=RuleExecutionStatus.NO_FAULT),
+            RuleExecutionResult(rule_id="TEST-CASE2", status=RuleExecutionStatus.NO_FAULT),
+            RuleExecutionResult(rule_id="TEST-CASE3", status=RuleExecutionStatus.NO_FAULT),
+            RuleExecutionResult(rule_id="TEST-CASE4", status=RuleExecutionStatus.NO_FAULT),
+        ],
+    )
+
+    report = validator.validate_execution(summary=summary, equipment_type="AHU")
+    rules_table = {r["Rule ID"]: r for r in report.rules_table}
+
+    # Case 1: Broad rule (equipment_kinds=[]) -> is_applicable=True, no warning
+    assert rules_table["TEST-CASE1"]["Valid"] == "Yes"
+    assert "Rule is not applicable to equipment type 'AHU'" not in rules_table["TEST-CASE1"]["Issues"]
+
+    # Case 2: Explicit AHU rule (equipment_kinds=['ahu']) -> is_applicable=True, no warning
+    assert rules_table["TEST-CASE2"]["Valid"] == "Yes"
+    assert "Rule is not applicable to equipment type 'AHU'" not in rules_table["TEST-CASE2"]["Issues"]
+
+    # Case 3: VAV rule on AHU equipment (equipment_kinds=['vav']) -> is_applicable=False, generates warning
+    assert rules_table["TEST-CASE3"]["Valid"] == "No"
+    assert "Rule is not applicable to equipment type 'AHU'" in rules_table["TEST-CASE3"]["Issues"]
+
+    # Case 4: Multi-equipment rule (equipment_kinds=['ahu', 'vav']) -> is_applicable=True, no warning
+    assert rules_table["TEST-CASE4"]["Valid"] == "Yes"
+    assert "Rule is not applicable to equipment type 'AHU'" not in rules_table["TEST-CASE4"]["Issues"]
